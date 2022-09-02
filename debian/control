@@ -1,0 +1,19 @@
+Source: wb-connection-manager
+Section: admin
+Priority: optional
+Maintainer: Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.ru>
+Build-Depends: debhelper (>= 10), dh-python, python3-all, python3-setuptools, pkg-config
+Standards-Version: 4.5.0
+Homepage: https://github.com/wirenboard/wb-nm-helper
+
+Package: python3-wb-connection-manager
+Section: python
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3-packaging, python3-dbus
+Description: Wirenboard network connections management python3 library
+
+Package: wb-connection-manager
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.5), python3-wb-connection-manager (= ${binary:Version})
+Description:  Wirenboard network connections manager.
+ The package includes network connections management service.
