@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
 
 import sys
-from wb.nm_helper.nm_helper import main
+from wb.connection_manager.connection_manager import main
 sys.exit(main())
