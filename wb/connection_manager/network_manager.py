@@ -27,16 +27,19 @@ class NetworkManager:
                 return c_obj
         return None
 
+    def get_active_connection_id(self, active_connection_path):
+        cn_path = self.get_active_connection_property(active_connection_path, "Connection")
+        cn_proxy = self.bus.get_object("org.freedesktop.NetworkManager", cn_path)
+        connection = dbus.Interface(cn_proxy, "org.freedesktop.NetworkManager.Settings.Connection")
+        settings = connection.GetSettings()
+        return str(settings["connection"]["id"])
+
     def get_active_connections(self):
         res = {}
         mgr_props = dbus.Interface(self.nm_proxy, "org.freedesktop.DBus.Properties")
         active = mgr_props.Get("org.freedesktop.NetworkManager", "ActiveConnections")
         for a in active:
-            cn_path = self.get_active_connection_property(a, "Connection")
-            cn_proxy = self.bus.get_object("org.freedesktop.NetworkManager", cn_path)
-            connection = dbus.Interface(cn_proxy, "org.freedesktop.NetworkManager.Settings.Connection")
-            settings = connection.GetSettings()
-            res[str(settings["connection"]["id"])] = a
+            res[self.get_active_connection_id(a)] = a
         return res
 
     def find_device_by_param(self, param_name, param_value):

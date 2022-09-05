@@ -3,21 +3,32 @@ import time
 import signal
 import datetime
 import logging
-import subprocess
 from network_manager import NetworkManager
 from modem_manager import ModemManager
+from collections import namedtuple
 
 # Settings
 CHECK_PERIOD = datetime.timedelta(seconds=5)
 CONNECTION_ACTIVATION_RETRY_TIMEOUT = datetime.timedelta(seconds=60)
 CONNECTION_ACTIVATION_TIMEOUT = datetime.timedelta(seconds=30)
 CONNECTION_DEACTIVATION_TIMEOUT = datetime.timedelta(seconds=30)
-PING_TIMEOUT = datetime.timedelta(seconds=10)
-PING_HOST = "ya.ru"
 CONNECTION_PRIORITY = ["wb-eth0", "wb-eth1", "wb-wifi", "wb-gsm-sim1", "wb-gsm-sim2"]
 
+#NMActiveConnectionState
+NM_ACTIVE_CONNECTION_STATE_UNKNOWN = 0
+NM_ACTIVE_CONNECTION_STATE_ACTIVATING = 1
 NM_ACTIVE_CONNECTION_STATE_ACTIVATED = 2
+NM_ACTIVE_CONNECTION_STATE_DEACTIVATING = 3
 NM_ACTIVE_CONNECTION_STATE_DEACTIVATED = 4
+
+# NMConnectivityState
+NM_CONNECTIVITY_UNKNOWN = 0
+NM_CONNECTIVITY_NONE = 1
+NM_CONNECTIVITY_PORTAL = 2
+NM_CONNECTIVITY_LIMITED = 3
+NM_CONNECTIVITY_FULL = 4
+
+ActivateConnectionResult = namedtuple('ActivateConnectionResult', ['path', 'deactivated_connection_id'])
 
 connection_up_time = dict()
 
@@ -62,22 +73,25 @@ def wait_connection_deactivation(nm, cn_path, timeout):
             current_state = nm.get_active_connection_property(cn_path, "State")
             if current_state == NM_ACTIVE_CONNECTION_STATE_DEACTIVATED:
                 return
-        except dbus.exceptions.UnknownMethodException:
-            # Connection object is already unexported
-            return
+        except dbus.exceptions.DBusException as ex:
+            if "org.freedesktop.DBus.Error.UnknownMethod" == ex.get_dbus_name():
+                # Connection object is already unexported
+                return
         time.sleep(1)
 
 def activate_gsm_connection(nm, cn_obj):
     dev = nm.find_device_for_connection(cn_obj)
     if not dev:
-        return None
+        return ActivateConnectionResult(None, False)
     dev_path = nm.get_device_property(dev, "Udi")
     logging.debug('Device path "%s"', dev_path)
     # Switching SIM card while other connection is active can cause NM restart
     # So deactivate active connection if it exists
+    old_active_connection_id = None
     active_connection_path = nm.get_active_connection_path(dev)
     if active_connection_path:
-        logging.debug('Deactivate active connection')
+        old_active_connection_id = nm.get_active_connection_id(active_connection_path)
+        logging.debug('Deactivate active connection "%s"', old_active_connection_id)
         nm.deactivate_connection(active_connection_path)
         wait_connection_deactivation(nm, active_connection_path, CONNECTION_DEACTIVATION_TIMEOUT)
     mm = ModemManager()
@@ -85,51 +99,50 @@ def activate_gsm_connection(nm, cn_obj):
         # After switching SIM card MM recreates device with new path
         dev = wait_device_for_connection(nm, cn_obj, datetime.timedelta(seconds=30))
         if not dev:
-            return None
+            return ActivateConnectionResult(None, old_active_connection_id)
         dev_path = nm.get_device_property(dev, "Udi")
         logging.debug('Device path after SIM switching "%s"', dev_path)
         active_connection_path = nm.activate_connection(cn_obj, dev)
         if wait_connection_activation(nm, active_connection_path, CONNECTION_ACTIVATION_TIMEOUT):
-            return active_connection_path
-    return None
+            return ActivateConnectionResult(active_connection_path, old_active_connection_id)
+    return ActivateConnectionResult(None, old_active_connection_id)
 
 def activate_generic_connection(nm, cn_obj):
     dev = nm.find_device_for_connection(cn_obj)
     if not dev:
-        return None
+        return ActivateConnectionResult(None, False)
     active_connection_path = nm.activate_connection(cn_obj, dev)
     if wait_connection_activation(nm, active_connection_path, CONNECTION_ACTIVATION_TIMEOUT):
-        return active_connection_path
-    return None
+        return ActivateConnectionResult(active_connection_path, False)
+    return ActivateConnectionResult(None, False)
+
+def is_time_to_activate(cn_id):
+    if cn_id in connection_up_time:
+        if connection_up_time[cn_id] + CONNECTION_ACTIVATION_RETRY_TIMEOUT > datetime.datetime.now():
+            return False
+    return True
 
 def activate_connection(nm, cn_id):
+    cn = ActivateConnectionResult(None, False)
+    activation_fns = {
+        "gsm": activate_gsm_connection,
+        "802-3-ethernet": activate_generic_connection,
+        "802-11-wireless": activate_generic_connection
+    }
     try:
-        if cn_id in connection_up_time:
-            if connection_up_time[cn_id] + CONNECTION_ACTIVATION_RETRY_TIMEOUT > datetime.datetime.now():
-                return None
         cn_obj = nm.find_connection(cn_id)
         if not cn_obj:
             logging.debug('"%s" not found', cn_id)
-            return None
-        logging.debug('Try to activate "%s"', cn_id)
+            return cn
+        logging.debug('Activate connection "%s"', cn_id)
         settings = cn_obj.GetSettings()
-        cn_path = None
-        cn_type = settings["connection"]["type"]
-        if cn_type == "gsm":
-            cn_path = activate_gsm_connection(nm, cn_obj)
-        elif cn_type == "802-3-ethernet":
-            cn_path = activate_generic_connection(nm, cn_obj)
-        elif cn_type == "802-11-wireless":
-            cn_path = activate_generic_connection(nm, cn_obj)
-        else:
-            connection_up_time[cn_id] = datetime.datetime.now()
-            return None
-        connection_up_time[cn_id] = datetime.datetime.now()
-        return cn_path
+        activate_fn = activation_fns.get(settings["connection"]["type"])
+        if activate_fn:
+            cn = activate_fn(nm, cn_obj)
+        return cn
     except Exception as ex:
         logging.debug(ex)
-        connection_up_time[cn_id] = datetime.datetime.now()
-        return None
+        return cn
 
 def deactivate_connection(nm, active_cn_path):
     try:
@@ -138,20 +151,32 @@ def deactivate_connection(nm, active_cn_path):
     except Exception as ex:
         logging.debug(ex)
 
+def get_active_connections(connection_ids, active_connections):
+    res = {}
+    for cn_id, cn_path in active_connections.items():
+        if cn_id in connection_ids:
+            res[cn_id] = cn_path
+    return res
 
-def deactivate_connections(nm, connections, active_connections):
-    for cn_id in connections:
-        if cn_id in active_connections:
-            logging.debug('Try to deactivate connection"%s"', cn_id)
-            deactivate_connection(nm, active_connections[cn_id])
+def deactivate_connections(nm, connections):
+    for cn_id, cn_path in connections.items():
+        logging.debug('Deactivate connection "%s"', cn_id)
+        deactivate_connection(nm, cn_path)
 
-def check_resource_availability(iface):
-    start = datetime.datetime.now()
-    while start + PING_TIMEOUT >= datetime.datetime.now():
-        if subprocess.call("ping -W 1 -c 3 %s -I %s" % (PING_HOST, iface), shell=True) == 0:
-            return True
-    logging.debug('Ping "%s" failed', PING_HOST)
-    return False
+def check_ip4_connectivity(nm, active_connection_path):
+    dev_paths = nm.get_active_connection_property(active_connection_path, "Devices")
+    if len(dev_paths):
+        # check only first device and IPv4 connectivity
+        return nm.get_device_property(dev_paths[0], "Ip4Connectivity")
+    return NM_CONNECTIVITY_UNKNOWN
+
+def deactivate_if_limited_connectivity(nm, active_cn_path):
+    ip4_connectivity = check_ip4_connectivity(nm, active_cn_path)
+    logging.debug('IPv4 connectivity = %d', ip4_connectivity)
+    if ip4_connectivity == NM_CONNECTIVITY_FULL:
+        return False
+    deactivate_connection(nm, active_cn_path)
+    return True
 
 def check():
     nm = NetworkManager()
@@ -159,19 +184,24 @@ def check():
     logging.debug('Active connections')
     logging.debug(active_connections)
     for index, cn_id in enumerate(CONNECTION_PRIORITY):
-        active_cn_path = None
         if cn_id in active_connections:
             logging.debug('"%s" is active', cn_id)
-            active_cn_path = active_connections[cn_id]
+            if not deactivate_if_limited_connectivity(nm, active_connections[cn_id]):
+                less_priority_connections = get_active_connections(CONNECTION_PRIORITY[index + 1:], active_connections)
+                deactivate_connections(nm, less_priority_connections)
+                return
         else:
-            active_cn_path = activate_connection(nm, cn_id)
-        if active_cn_path:
-            ifaces = nm.get_active_connection_ifaces(active_cn_path)
-            if len(ifaces):
-                if check_resource_availability(ifaces[0]):
-                    deactivate_connections(nm, CONNECTION_PRIORITY[index+1:], active_connections)
+            if is_time_to_activate(cn_id):
+                active_cn = activate_connection(nm, cn_id)
+                connection_up_time[cn_id] = datetime.datetime.now()
+                if active_cn.path:
+                    if not deactivate_if_limited_connectivity(nm, active_cn.path):
+                        less_priority_connections = get_active_connections(CONNECTION_PRIORITY[index + 1:], active_connections)
+                        deactivate_connections(nm, less_priority_connections)
+                        return
+                if active_cn.deactivated_connection_id:
+                    connection_up_time[active_cn.deactivated_connection_id] = datetime.datetime.now() - CONNECTION_ACTIVATION_RETRY_TIMEOUT
                     return
-            deactivate_connection(nm, active_cn_path)
 
 def main():
     logging.basicConfig(level=logging.DEBUG)

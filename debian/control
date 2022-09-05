@@ -15,5 +15,6 @@ Description: Wirenboard network connections management python3 library
 Package: wb-connection-manager
 Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.5), python3-wb-connection-manager (= ${binary:Version})
+Suggests: network-manager-config-connectivity-debian
 Description:  Wirenboard network connections manager.
  The package includes network connections management service.
