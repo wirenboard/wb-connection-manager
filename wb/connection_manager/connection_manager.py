@@ -3,7 +3,7 @@ import time
 import signal
 import datetime
 import logging
-from network_manager import NetworkManager
+from network_manager import NetworkManager, NM_CONNECTIVITY_FULL
 from modem_manager import ModemManager
 from collections import namedtuple
 
@@ -20,13 +20,6 @@ NM_ACTIVE_CONNECTION_STATE_ACTIVATING = 1
 NM_ACTIVE_CONNECTION_STATE_ACTIVATED = 2
 NM_ACTIVE_CONNECTION_STATE_DEACTIVATING = 3
 NM_ACTIVE_CONNECTION_STATE_DEACTIVATED = 4
-
-# NMConnectivityState
-NM_CONNECTIVITY_UNKNOWN = 0
-NM_CONNECTIVITY_NONE = 1
-NM_CONNECTIVITY_PORTAL = 2
-NM_CONNECTIVITY_LIMITED = 3
-NM_CONNECTIVITY_FULL = 4
 
 ActivateConnectionResult = namedtuple('ActivateConnectionResult', ['path', 'deactivated_connection_id'])
 
@@ -79,9 +72,10 @@ def wait_connection_deactivation(nm, cn_path, timeout):
                 return
         time.sleep(1)
 
-def activate_gsm_connection(nm, cn_obj):
+def activate_gsm_connection(nm, cn_obj, cn_id):
     dev = nm.find_device_for_connection(cn_obj)
     if not dev:
+        logging.debug('Device for connection "%s" is not found', cn_id)
         return ActivateConnectionResult(None, False)
     dev_path = nm.get_device_property(dev, "Udi")
     logging.debug('Device path "%s"', dev_path)
@@ -99,6 +93,7 @@ def activate_gsm_connection(nm, cn_obj):
         # After switching SIM card MM recreates device with new path
         dev = wait_device_for_connection(nm, cn_obj, datetime.timedelta(seconds=30))
         if not dev:
+            logging.debug('Device for connection "%s" is not found', cn_id)
             return ActivateConnectionResult(None, old_active_connection_id)
         dev_path = nm.get_device_property(dev, "Udi")
         logging.debug('Device path after SIM switching "%s"', dev_path)
@@ -107,14 +102,15 @@ def activate_gsm_connection(nm, cn_obj):
             return ActivateConnectionResult(active_connection_path, old_active_connection_id)
     return ActivateConnectionResult(None, old_active_connection_id)
 
-def activate_generic_connection(nm, cn_obj):
+def activate_generic_connection(nm, cn_obj, cn_id):
     dev = nm.find_device_for_connection(cn_obj)
     if not dev:
-        return ActivateConnectionResult(None, False)
+        logging.debug('Device for connection "%s" is not found', cn_id)
+        return ActivateConnectionResult(None, None)
     active_connection_path = nm.activate_connection(cn_obj, dev)
     if wait_connection_activation(nm, active_connection_path, CONNECTION_ACTIVATION_TIMEOUT):
-        return ActivateConnectionResult(active_connection_path, False)
-    return ActivateConnectionResult(None, False)
+        return ActivateConnectionResult(active_connection_path, None)
+    return ActivateConnectionResult(None, None)
 
 def is_time_to_activate(cn_id):
     if cn_id in connection_up_time:
@@ -163,16 +159,9 @@ def deactivate_connections(nm, connections):
         logging.debug('Deactivate connection "%s"', cn_id)
         deactivate_connection(nm, cn_path)
 
-def check_ip4_connectivity(nm, active_connection_path):
-    dev_paths = nm.get_active_connection_property(active_connection_path, "Devices")
-    if len(dev_paths):
-        # check only first device and IPv4 connectivity
-        return nm.get_device_property(dev_paths[0], "Ip4Connectivity")
-    return NM_CONNECTIVITY_UNKNOWN
-
 def deactivate_if_limited_connectivity(nm, active_cn_path):
-    ip4_connectivity = check_ip4_connectivity(nm, active_cn_path)
-    logging.debug('IPv4 connectivity = %d', ip4_connectivity)
+    ip4_connectivity = nm.get_ip4_connectivity(nm, active_cn_path)
+    logging.debug('IPv4 connectivity = %s', ip4_connectivity.name)
     if ip4_connectivity == NM_CONNECTIVITY_FULL:
         return False
     deactivate_connection(nm, active_cn_path)

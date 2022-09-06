@@ -1,6 +1,11 @@
 import dbus
-import datetime
-import logging
+
+# NMConnectivityState
+NM_CONNECTIVITY_UNKNOWN = 0
+NM_CONNECTIVITY_NONE = 1
+NM_CONNECTIVITY_PORTAL = 2
+NM_CONNECTIVITY_LIMITED = 3
+NM_CONNECTIVITY_FULL = 4
 
 def connection_type_to_device_type(cn_type):
     types = {
@@ -56,11 +61,7 @@ class NetworkManager:
         if not value:
             param = "DeviceType"
             value = connection_type_to_device_type(settings["connection"]["type"])
-        dev = self.find_device_by_param(param, value)
-        if not dev:
-            logging.debug('Device for connection "%s" is not found', settings["connection"]["id"])
-            return None
-        return dev
+        return self.find_device_by_param(param, value)
 
     def get_device_property(self, device_path, property_name):
         dev_proxy = self.bus.get_object("org.freedesktop.NetworkManager", device_path)
@@ -90,3 +91,10 @@ class NetworkManager:
         for dev_path in self.get_active_connection_property(active_connection_path, "Devices"):
             res.append(self.get_device_property(dev_path, "IpInterface"))
         return res
+
+    def get_ip4_connectivity(self, active_connection_path):
+        dev_paths = self.get_active_connection_property(active_connection_path, "Devices")
+        if len(dev_paths):
+            # check only first device and IPv4 connectivity
+            return self.get_device_property(dev_paths[0], "Ip4Connectivity")
+        return NM_CONNECTIVITY_UNKNOWN
