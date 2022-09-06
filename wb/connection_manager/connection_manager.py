@@ -199,7 +199,8 @@ def main():
         try:
             check()
         except Exception as ex:
-            logging.debug(ex)
+            logging.critical(ex, exc_info=True)
+            exit(1)
         time.sleep(CHECK_PERIOD.total_seconds())
 
 if __name__ == "__main__":
