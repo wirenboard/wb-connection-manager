@@ -1,3 +1,5 @@
+from asyncio.log import logger
+import logging
 import dbus
 
 # NMConnectivityState
@@ -49,6 +51,7 @@ class NetworkManager:
 
     def find_device_by_param(self, param_name, param_value):
         devices = self.nm.GetDevices()
+        logger.debug(devices)
         for d in devices:
             if self.get_device_property(d, param_name) == param_value:
                 return d
@@ -93,7 +96,9 @@ class NetworkManager:
         return res
 
     def get_ip4_connectivity(self, active_connection_path):
+        logging.debug(active_connection_path)
         dev_paths = self.get_active_connection_property(active_connection_path, "Devices")
+        logging.debug(dev_paths)
         if len(dev_paths):
             # check only first device and IPv4 connectivity
             return self.get_device_property(dev_paths[0], "Ip4Connectivity")

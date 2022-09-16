@@ -1,0 +1,13 @@
+[Unit]
+Description=Network connections management service for Wiren Board devices
+After=network.target wb-hwconf-manager.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=2
+User=root
+ExecStart=/usr/lib/wb-connection-manager/wb-connection-manager
+
+[Install]
+WantedBy=multi-user.target

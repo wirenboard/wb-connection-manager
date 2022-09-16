@@ -9,12 +9,11 @@ Homepage: https://github.com/wirenboard/wb-nm-helper
 Package: python3-wb-connection-manager
 Section: python
 Architecture: all
-Depends: ${python3:Depends}, ${misc:Depends}, python3-packaging, python3-dbus
+Depends: ${python3:Depends}, ${misc:Depends}, python3-packaging, python3-dbus, python3-pycurl
 Description: Wiren Board network connections management python3 library
 
 Package: wb-connection-manager
 Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.5), python3-wb-connection-manager (= ${binary:Version})
-Suggests: network-manager-config-connectivity-debian
 Description:  Wiren Board network connections manager
  The package includes network connections management service.
